@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <title>IGO DIAS V3.4 - SEARCH & GALAXY</title>
+    <style>
+        body { margin: 0; overflow: hidden; background: #000; font-family: 'Courier New', monospace; }
+        canvas { display: block; filter: contrast(140%) brightness(110%); }
+        
+        #status-display { 
+            position: absolute; top: 20px; left: 20px; color: #00d2ff; font-size: 11px; 
+            border-left: 3px solid #00d2ff; padding-left: 10px; z-index: 100;
+        }
+
+        /* BARRA DE PESQUISA ESTILIZADA */
+        #search-container {
+            position: absolute; bottom: 40px; left: 50%; transform: translateX(-50%);
+            z-index: 200; width: 400px;
+        }
+        #search-bar {
+            width: 100%; padding: 12px 20px; background: rgba(0, 210, 255, 0.1);
+            border: 1px solid rgba(0, 210, 255, 0.4); border-radius: 25px;
+            color: #fff; font-family: 'Courier New', monospace; font-size: 16px;
+            outline: none; transition: all 0.3s ease; text-align: center;
+            backdrop-filter: blur(5px);
+        }
+        #search-bar:focus {
+            background: rgba(0, 210, 255, 0.2); border-color: #00d2ff;
+            box-shadow: 0 0 15px rgba(0, 210, 255, 0.5); width: 450px;
+        }
+        #search-bar::placeholder { color: rgba(0, 210, 255, 0.5); }
+
+        video { position: absolute; opacity: 0; pointer-events: none; width: 1px; height: 1px; }
+    </style>
+</head>
+<body onclick="videoElement.play()">
+
+    <video id="webcam" autoplay playsinline></video>
+    <div id="status-display">MODO: NOME<br>SISTEMA PRONTO</div>
+
+    <div id="search-container">
+        <input type="text" id="search-bar" placeholder="Pesquisar no Google..." onkeydown="if(event.key === 'Enter') searchGoogle()">
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/simplex-noise/2.4.0/simplex-noise.min.js"></script>
+
+    <script>
+        const videoElement = document.getElementById('webcam');
+        const statusDisp = document.getElementById('status-display');
+        const simplex = new SimplexNoise();
+        
+        let scene, camera, renderer, points, geometry;
+        const particleCount = 15000;
+        let positions = new Float32Array(particleCount * 3);
+        let colors = new Float32Array(particleCount * 3);
+        
+        let targets = { name: [], rocket: [], saturn: [], solarsystem: [] };
+        let currentTarget = new Float32Array(particleCount * 3);
+        let shapeIndex = 0;
+        const shapes = ['name', 'rocket', 'saturn', 'solarsystem'];
+        
+        let handExpansion = 1.0, targetExpansion = 1.0, canSwitch = true;
+
+        // FUNÇÃO DE PESQUISA
+        function searchGoogle() {
+            const query = document.getElementById('search-bar').value;
+            if (query.trim() !== "") {
+                window.open(`https://www.google.com/search?q=${encodeURIComponent(query)}`, '_blank');
+            }
+        }
+
+        function init() {
+            scene = new THREE.Scene();
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            document.body.appendChild(renderer.domElement);
+
+            generateShapes();
+
+            geometry = new THREE.BufferGeometry();
+            geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+            geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+            
+            points = new THREE.Points(geometry, new THREE.PointsMaterial({ 
+                size: 0.14, vertexColors: true, transparent: true, blending: THREE.AdditiveBlending 
+            }));
+            scene.add(points);
+            camera.position.z = 40;
+
+            setupAI();
+            animate();
+        }
+
+        function generateShapes() {
+            const canvas = document.createElement('canvas');
+            const ctx = canvas.getContext('2d');
+            canvas.width = 2000; canvas.height = 600;
+            ctx.fillStyle = 'white'; ctx.font = 'bold 320px Arial'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+            ctx.fillText('IGO DIAS', 1000, 300);
+            const pixels = ctx.getImageData(0,0,2000,600).data;
+            const nameArr = new Float32Array(particleCount * 3);
+            let pCount = 0;
+            while(pCount < particleCount) {
+                let x = Math.random() * 2000; let y = Math.random() * 600;
+                if(pixels[(Math.floor(y)*2000+Math.floor(x))*4+3] > 150) {
+                    nameArr[pCount*3]=(x-1000)*0.05; nameArr[pCount*3+1]=(300-y)*0.05; nameArr[pCount*3+2]=simplex.noise2D(x*0.01, y*0.01)*5;
+                    pCount++;
+                }
+            }
+            targets.name = nameArr;
+            currentTarget.set(nameArr);
+
+            const rocArr = new Float32Array(particleCount * 3);
+            for(let i=0; i<particleCount; i++){
+                const h = Math.random()*20;
+                if(h>15){ const r=(20-h)*0.6, a=Math.random()*Math.PI*2; rocArr[i*3]=r*Math.cos(a); rocArr[i*3+1]=h-10; rocArr[i*3+2]=r*Math.sin(a); }
+                else if(h>5){ const r=3, a=Math.random()*Math.PI*2; rocArr[i*3]=r*Math.cos(a); rocArr[i*3+1]=h-10; rocArr[i*3+2]=r*Math.sin(a); }
+                else { const r=Math.random()*4, a=Math.random()*Math.PI*2; rocArr[i*3]=r*Math.cos(a); rocArr[i*3+1]=h-12; rocArr[i*3+2]=r*Math.sin(a); }
+            }
+            targets.rocket = rocArr;
+
+            const satArr = new Float32Array(particleCount * 3);
+            for(let i=0; i<particleCount; i++){
+                if(i < particleCount*0.5){ const u=Math.random(), v=Math.random(), t=2*Math.PI*u, p=Math.acos(2*v-1), r=7; satArr[i*3]=r*Math.cos(t)*Math.sin(p); satArr[i*3+1]=r*Math.sin(t)*Math.sin(p); satArr[i*3+2]=r*Math.cos(p); }
+                else { const r=11+Math.random()*5, a=Math.random()*Math.PI*2; satArr[i*3]=r*Math.cos(a); satArr[i*3+1]=r*Math.sin(a)*0.2; satArr[i*3+2]=r*Math.sin(a)*0.8; }
+            }
+            targets.saturn = satArr;
+
+            const solArr = new Float32Array(particleCount * 3);
+            for(let i=0; i<particleCount; i++){
+                if(i < particleCount*0.3){ const r=Math.random()*5, t=Math.random()*2*Math.PI, p=Math.acos(2*Math.random()-1); solArr[i*3]=r*Math.sin(p)*Math.cos(t); solArr[i*3+1]=r*Math.sin(p)*Math.sin(t); solArr[i*3+2]=r*Math.cos(p); }
+                else { const r=10+(i%6)*4, a=Math.random()*2*Math.PI; solArr[i*3]=r*Math.cos(a); solArr[i*3+1]=r*Math.sin(a)*Math.sin(0.6); solArr[i*3+2]=r*Math.sin(a)*Math.cos(0.6); }
+            }
+            targets.solarsystem = solArr;
+        }
+
+        function setupAI() {
+            const hands = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
+            hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.6 });
+            
+            hands.onResults(res => {
+                if(res.multiHandLandmarks && res.multiHandLandmarks[0]){
+                    const lm = res.multiHandLandmarks[0];
+                    const d = Math.hypot(lm[0].x - lm[12].x, lm[0].y - lm[12].y);
+                    targetExpansion = 0.5 + (d * 18);
+                    
+                    const pinch = Math.hypot(lm[4].x - lm[8].x, lm[4].y - lm[8].y);
+                    if(pinch < 0.05 && canSwitch){
+                        shapeIndex = (shapeIndex + 1) % shapes.length;
+                        currentTarget.set(targets[shapes[shapeIndex]]);
+                        canSwitch = false;
+                        statusDisp.innerHTML = `MODO: ${shapes[shapeIndex].toUpperCase()}`;
+                    } else if(pinch > 0.12) canSwitch = true;
+                } else {
+                    targetExpansion = 1.0; 
+                }
+            });
+            new Camera(videoElement, { onFrame: async () => { await hands.send({image: videoElement}); }, width: 640, height: 480 }).start();
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            renderer.setClearColor(0x000000, 0.15);
+            renderer.clear();
+            const time = Date.now() * 0.001;
+            const pos = geometry.attributes.position.array;
+            const col = geometry.attributes.color.array;
+            
+            handExpansion += (targetExpansion - handExpansion) * 0.08;
+            const mode = shapes[shapeIndex];
+
+            for(let i=0; i<particleCount; i++){
+                const i3 = i * 3;
+                let tx = currentTarget[i3] * handExpansion;
+                let ty = currentTarget[i3+1] * handExpansion;
+                let tz = currentTarget[i3+2] * handExpansion;
+
+                if(mode === 'solarsystem' && i > particleCount*0.3) {
+                    const r = Math.hypot(currentTarget[i3], currentTarget[i3+2]);
+                    const ang = time * (8/r) + i;
+                    tx = r * Math.cos(ang) * handExpansion;
+                    const z = r * Math.sin(ang);
+                    ty = z * Math.sin(0.6) * handExpansion;
+                    tz = z * Math.cos(0.6) * handExpansion;
+                }
+
+                pos[i3] += (tx - pos[i3]) * 0.12;
+                pos[i3+1] += (ty - pos[i3+1]) * 0.12;
+                pos[i3+2] += (tz - pos[i3+2]) * 0.12;
+
+                if(mode === 'name') {
+                    const r = Math.hypot(pos[i3], pos[i3+1]);
+                    const wave = Math.sin(r * 0.2 - time * 3) * 0.5 + 0.5;
+                    col[i3] = 0.3 + 0.7 * wave; col[i3+1] = 0.1; col[i3+2] = 0.6 + 0.4 * (1-wave);
+                } else if(mode === 'solarsystem' && i < particleCount*0.3) { col[i3]=1; col[i3+1]=0.6; col[i3+2]=0; }
+                else if(mode === 'rocket' && i > particleCount*0.7) { col[i3]=1; col[i3+1]=0.3; col[i3+2]=0; }
+                else { col[i3]=0.2; col[i3+1]=0.8; col[i3+2]=1; }
+            }
+            geometry.attributes.position.needsUpdate = true;
+            geometry.attributes.color.needsUpdate = true;
+            renderer.render(scene, camera);
+        }
+        window.onload = init;
+    </script>
+</body>
+</html>
